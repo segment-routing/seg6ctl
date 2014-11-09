@@ -1,0 +1,41 @@
+I. Compilation
+==============
+
+You need libnl3 and libgenl3. On Gentoo: dev-libs/libnl package, slot (3).
+
+gcc -o seg6ctl seg6ctl.c -g -Wall -W -lnl3 -lnl-genl-3 -I/usr/include/libnl3
+
+Arguments might change w.r.t. Linux distribution.
+
+II. Usage
+=========
+
+1. Add segments 2000:1::10, 2000:1::32 and 2000:1::43 for destination prefix 2000:2::1/128:
+   ./seg6ctl --prefix 2000:2::1/128 --add 2000:1::10,2000:1::32,2000:1::43
+
+2. Same, but with cleanup flag set:
+   ./seg6ctl --prefix 2000:2::1/128 --add 2000:1::10,2000:1::32,2000:1::43 --cleanup
+
+3. Same, but with HMAC key ID set to 42:
+   ./seg6ctl --prefix 2000:2::1/128 --add 2000:1::10,2000:1::32,2000:1::43 --cleanup --hmackeyid 42
+
+4. Display segments table:
+   ./seg6ctl --show
+
+5. Flush segments table:
+   ./seg6ctl --flush
+
+6. Delete entry for destination prefix 2000:2::1/128:
+   ./seg6ctl --prefix 2000:2::1/128 --delete
+
+7. Set a secret for HMAC key ID 42:
+   ./seg6ctl --set-hmac 1 --hmackeyid 42
+   # Command will prompt for secret, just type it
+   # The parameter `1' for --set-hmac is the ID of the hashing algorithm, unused for now, let it at 1
+
+8. Remove the secret for HMAC key ID 42:
+   ./seg6ctl --set-hmac 1 --hmackeyid 42
+   # Just press enter when prompt is displayed
+
+9. Display HMAC table:
+   ./seg6ctl --dump-hmac
