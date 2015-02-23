@@ -44,6 +44,8 @@ enum {
     SEG6_ATTR_SECRETLEN,
     SEG6_ATTR_ALGID,
     SEG6_ATTR_HMACINFO,
+    SEG6_ATTR_BIND_NEXTHOP,
+    SEG6_ATTR_BINDINFO,
     __SEG6_ATTR_MAX,
 };
 
@@ -57,6 +59,10 @@ enum {
     SEG6_CMD_DUMP,
     SEG6_CMD_SETHMAC,
     SEG6_CMD_DUMPHMAC,
+    SEG6_CMD_ADDBIND,
+    SEG6_CMD_DELBIND,
+    SEG6_CMD_FLUSHBIND,
+    SEG6_CMD_DUMPBIND,
     __SEG6_CMD_MAX,
 };
 
@@ -75,6 +81,8 @@ static struct nla_policy seg6_genl_policy[SEG6_ATTR_MAX + 1] = {
     [SEG6_ATTR_SECRETLEN]   = { .type = NLA_U8, },
     [SEG6_ATTR_ALGID]       = { .type = NLA_U8, },
     [SEG6_ATTR_HMACINFO]    = { .type = NLA_NESTED, },
+    [SEG6_ATTR_BIND_NEXTHOP] = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
+    [SEG6_ATTR_BINDINFO]    = { .type = NLA_NESTED, },
 };
 
 void usage(char *av0)
@@ -89,7 +97,11 @@ void usage(char *av0)
                     "\t\t[-m KEYID|--hmackeyid KEYID]\n"
                     "\t\t[-i SEGLISTID|--id SEGLISTID]\n"
                     "\t\t[--set-hmac ALGO]\n"
-                    "\t\t[--dump-hmac]\n", av0);
+                    "\t\t[--dump-hmac]\n"
+                    "\t\t[--bind-sid SEGMENT]\n"
+                    "\t\t[--nexthop SEGMENT]\n"
+                    "\t\t[--dump-bind]\n"
+                    "\t\t[--flush-bind]\n", av0);
     exit(1);
 }
 
@@ -227,6 +239,30 @@ static void parse_dumphmac(struct nlattr *attr)
     printf("hmac 0x%x algo %d secret \"%s\"\n", hmackey, algid, secret);
 }
 
+static void parse_dumpbind(struct nlattr *attr)
+{
+    static struct nla_policy uspace_pol[SEG6_ATTR_MAX + 1] = {
+        [SEG6_ATTR_DST] = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
+        [SEG6_ATTR_BIND_NEXTHOP] = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
+    };
+
+    struct nlattr *a[SEG6_ATTR_MAX + 1];
+    struct in6_addr dst, nexthop;
+    char ip6[40], ip6nh[40];
+
+    if (!attr)
+        return;
+
+    nla_parse_nested(a, SEG6_ATTR_MAX, attr, uspace_pol);
+    memcpy(&dst, nla_data(a[SEG6_ATTR_DST]), sizeof(struct in6_addr));
+    memcpy(&nexthop, nla_data(a[SEG6_ATTR_BIND_NEXTHOP]), sizeof(struct in6_addr));
+
+    inet_ntop(AF_INET6, &dst, ip6, 40);
+    inet_ntop(AF_INET6, &nexthop, ip6nh, 40);
+
+    printf("binding-sid %s next-hop %s\n", ip6, ip6nh);
+}
+
 static int nl_recv_cb(struct nl_msg *msg, void *arg __unused)
 {
     struct nlmsghdr *nlh = nlmsg_hdr(msg);
@@ -243,6 +279,9 @@ static int nl_recv_cb(struct nl_msg *msg, void *arg __unused)
 
     if (gnlh->cmd == SEG6_CMD_DUMPHMAC)
         parse_dumphmac(attrs[SEG6_ATTR_HMACINFO]);
+
+    if (gnlh->cmd == SEG6_CMD_DUMPBIND)
+        parse_dumpbind(attrs[SEG6_ATTR_BINDINFO]);
 
     return NL_SKIP;
 }
@@ -309,6 +348,7 @@ int main(int ac, char **av)
     int family_req;
     int c;
     char *pass;
+    struct in6_addr in6;
     static struct {
         uint16_t id;
         int cleanup;
@@ -317,6 +357,8 @@ int main(int ac, char **av)
         char *prefix;
         char *segments;
         int algo;
+        char *binding_sid;
+        char *nexthop;
     } opts;
     int op = 0;
 #define OP_DUMP     1
@@ -325,6 +367,9 @@ int main(int ac, char **av)
 #define OP_DEL      5
 #define OP_SETHMAC  6
 #define OP_DUMPHMAC 7
+#define OP_BINDSID  8
+#define OP_DUMPBIND 9
+#define OP_FLUSHBIND 10
 
     static struct option long_options[] = 
         {
@@ -339,6 +384,10 @@ int main(int ac, char **av)
             {"id",      required_argument,  0, 'i'},
             {"set-hmac", required_argument, 0, 0 },
             {"dump-hmac", no_argument, 0, 0 },
+            {"bind-sid", required_argument, 0, 0 },
+            {"nexthop", required_argument, 0, 0 },
+            {"dump-bind", no_argument, 0, 0 },
+            {"flush-bind", no_argument, 0, 0 },
             {0, 0, 0, 0}
         };
     int option_index = 0;
@@ -353,6 +402,15 @@ int main(int ac, char **av)
                 opts.algo = atoi(optarg);
             } else if (!strcmp(long_options[option_index].name, "dump-hmac")) {
                 op = OP_DUMPHMAC;
+            } else if (!strcmp(long_options[option_index].name, "bind-sid")) {
+                op = OP_BINDSID;
+                opts.binding_sid = optarg;
+            } else if (!strcmp(long_options[option_index].name, "nexthop")) {
+                opts.nexthop = optarg;
+            } else if (!strcmp(long_options[option_index].name, "dump-bind")) {
+                op = OP_DUMPBIND;
+            } else if (!strcmp(long_options[option_index].name, "flush-bind")) {
+                op = OP_FLUSHBIND;
             }
             break;
         case 's':
@@ -458,6 +516,24 @@ int main(int ac, char **av)
         nla_put_u8(msg, SEG6_ATTR_SECRETLEN, strlen(pass));
         if (strlen(pass))
             nla_put(msg, SEG6_ATTR_SECRET, strlen(pass), pass);
+        break;
+    case OP_BINDSID:
+        if (!opts.nexthop) {
+            fprintf(stderr, "Missing nexthop for BINDSID operation\n");
+            return 1;
+        }
+
+        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_ADDBIND, 1);
+        inet_pton(AF_INET6, opts.binding_sid, &in6);
+        nla_put(msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &in6);
+        inet_pton(AF_INET6, opts.nexthop, &in6);
+        nla_put(msg, SEG6_ATTR_BIND_NEXTHOP, sizeof(struct in6_addr), &in6);
+        break;
+    case OP_DUMPBIND:
+        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_DUMPBIND, 1);
+        break;
+    case OP_FLUSHBIND:
+        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_FLUSHBIND, 1);
         break;
     default:
         usage(av[0]);
