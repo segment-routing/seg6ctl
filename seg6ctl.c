@@ -28,6 +28,12 @@
 
 #define __unused __attribute__((unused))
 
+#define SEG6_BIND_NEXT      0   /* aka no-op, classical sr processing */
+#define SEG6_BIND_ROUTE     1   /* force route through given next hop */
+#define SEG6_BIND_INSERT    2   /* push segments in srh */
+#define SEG6_BIND_TRANSLATE 3   /* translate source/dst ? */
+#define SEG6_BIND_SERVICE   4   /* send packet to virtual service */
+
 void usage(char *) __attribute__((noreturn));
 
 enum {
@@ -44,8 +50,12 @@ enum {
     SEG6_ATTR_SECRETLEN,
     SEG6_ATTR_ALGID,
     SEG6_ATTR_HMACINFO,
-    SEG6_ATTR_BIND_NEXTHOP,
+    SEG6_ATTR_BIND_OP,
+    SEG6_ATTR_BIND_DATA,
+    SEG6_ATTR_BIND_DATALEN,
     SEG6_ATTR_BINDINFO,
+    SEG6_ATTR_PACKET_DATA,
+    SEG6_ATTR_PACKET_LEN,
     __SEG6_ATTR_MAX,
 };
 
@@ -63,6 +73,8 @@ enum {
     SEG6_CMD_DELBIND,
     SEG6_CMD_FLUSHBIND,
     SEG6_CMD_DUMPBIND,
+    SEG6_CMD_PACKET_IN,
+    SEG6_CMD_PACKET_OUT,
     __SEG6_CMD_MAX,
 };
 
@@ -81,8 +93,12 @@ static struct nla_policy seg6_genl_policy[SEG6_ATTR_MAX + 1] = {
     [SEG6_ATTR_SECRETLEN]   = { .type = NLA_U8, },
     [SEG6_ATTR_ALGID]       = { .type = NLA_U8, },
     [SEG6_ATTR_HMACINFO]    = { .type = NLA_NESTED, },
-    [SEG6_ATTR_BIND_NEXTHOP] = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
-    [SEG6_ATTR_BINDINFO]    = { .type = NLA_NESTED, },
+    [SEG6_ATTR_BIND_OP]         = { .type = NLA_U8, },
+    [SEG6_ATTR_BIND_DATA]       = { .type = NLA_UNSPEC, },
+    [SEG6_ATTR_BIND_DATALEN]    = { .type = NLA_U32, },
+    [SEG6_ATTR_BINDINFO]        = { .type = NLA_NESTED, },
+    [SEG6_ATTR_PACKET_DATA]     = { .type = NLA_UNSPEC, },
+    [SEG6_ATTR_PACKET_LEN]      = { .type = NLA_U32, },
 };
 
 void usage(char *av0)
@@ -101,7 +117,8 @@ void usage(char *av0)
                     "\t\t[--bind-sid SEGMENT]\n"
                     "\t\t[--nexthop SEGMENT]\n"
                     "\t\t[--dump-bind]\n"
-                    "\t\t[--flush-bind]\n", av0);
+                    "\t\t[--flush-bind]\n"
+                    "\t\t[--bind-op OPERATION]\n", av0);
     exit(1);
 }
 
@@ -173,11 +190,6 @@ int process_delseg(struct nl_msg *msg, char *ddst, int id)
 
 static void parse_dump(struct nlattr *attr)
 {
-    static struct nla_policy uspace_pol[SEG6_ATTR_MAX + 1] =  {
-        [SEG6_ATTR_DST] = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
-        [SEG6_ATTR_SEGMENTS] = { .type = NLA_UNSPEC, },
-    };
-
     struct nlattr *a[SEG6_ATTR_MAX + 1];
 
     char ip6[40];
@@ -193,7 +205,7 @@ static void parse_dump(struct nlattr *attr)
     if (!attr)
         return;
 
-    nla_parse_nested(a, SEG6_ATTR_MAX, attr, uspace_pol);
+    nla_parse_nested(a, SEG6_ATTR_MAX, attr, NULL);
     memcpy(&dst, nla_data(a[SEG6_ATTR_DST]), sizeof(struct in6_addr));
     dst_len = nla_get_u32(a[SEG6_ATTR_DSTLEN]);
     seg_id = nla_get_u16(a[SEG6_ATTR_SEGLISTID]);
@@ -217,10 +229,6 @@ static void parse_dump(struct nlattr *attr)
 
 static void parse_dumphmac(struct nlattr *attr)
 {
-    static struct nla_policy uspace_pol[SEG6_ATTR_MAX + 1] = {
-        [SEG6_ATTR_SECRET] = { .type = NLA_UNSPEC, .maxlen = 64 },
-    };
-
     struct nlattr *a[SEG6_ATTR_MAX + 1];
     int slen, algid, hmackey;
     char secret[64];
@@ -230,7 +238,7 @@ static void parse_dumphmac(struct nlattr *attr)
 
     memset(secret, 0, 64);
 
-    nla_parse_nested(a, SEG6_ATTR_MAX, attr, uspace_pol);
+    nla_parse_nested(a, SEG6_ATTR_MAX, attr, NULL);
     slen = nla_get_u8(a[SEG6_ATTR_SECRETLEN]);
     memcpy(secret, nla_data(a[SEG6_ATTR_SECRET]), slen);
     algid = nla_get_u8(a[SEG6_ATTR_ALGID]);
@@ -241,26 +249,31 @@ static void parse_dumphmac(struct nlattr *attr)
 
 static void parse_dumpbind(struct nlattr *attr)
 {
-    static struct nla_policy uspace_pol[SEG6_ATTR_MAX + 1] = {
-        [SEG6_ATTR_DST] = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
-        [SEG6_ATTR_BIND_NEXTHOP] = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
-    };
-
     struct nlattr *a[SEG6_ATTR_MAX + 1];
     struct in6_addr dst, nexthop;
     char ip6[40], ip6nh[40];
+    int bop;
+    uint32_t nlpid = 0;
 
     if (!attr)
         return;
 
-    nla_parse_nested(a, SEG6_ATTR_MAX, attr, uspace_pol);
+    nla_parse_nested(a, SEG6_ATTR_MAX, attr, NULL);
+    bop = nla_get_u8(a[SEG6_ATTR_BIND_OP]);
     memcpy(&dst, nla_data(a[SEG6_ATTR_DST]), sizeof(struct in6_addr));
-    memcpy(&nexthop, nla_data(a[SEG6_ATTR_BIND_NEXTHOP]), sizeof(struct in6_addr));
 
     inet_ntop(AF_INET6, &dst, ip6, 40);
-    inet_ntop(AF_INET6, &nexthop, ip6nh, 40);
+    printf("binding-sid %s op %d", ip6, bop);
 
-    printf("binding-sid %s next-hop %s\n", ip6, ip6nh);
+    if (bop == SEG6_BIND_ROUTE) {
+        memcpy(&nexthop, nla_data(a[SEG6_ATTR_BIND_DATA]), sizeof(struct in6_addr));
+        inet_ntop(AF_INET6, &nexthop, ip6nh, 40);
+        printf(" next-hop %s\n", ip6nh);
+    }
+    if (bop == SEG6_BIND_SERVICE) {
+        memcpy(&nlpid, nla_data(a[SEG6_ATTR_BIND_DATA]), sizeof(uint32_t));
+        printf(" pid %u\n", nlpid);
+    }
 }
 
 static int nl_recv_cb(struct nl_msg *msg, void *arg __unused)
@@ -308,7 +321,7 @@ static int nl_send_ack(struct nl_msg *msg __unused, void *arg)
     return NL_STOP;
 }
 
-static int nl_send_and_recv(struct nl_sock *sk, struct nl_msg *msg)
+static int nl_send_and_recv(struct nl_sock *sk, struct nl_msg *msg, int keepalive)
 {
     struct nl_cb *cb;
     int err = -ENOMEM;
@@ -326,7 +339,7 @@ static int nl_send_and_recv(struct nl_sock *sk, struct nl_msg *msg)
     nl_cb_err(cb, NL_CB_CUSTOM, nl_send_error, &err);
     nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, nl_send_ack, &err);
 
-    while (err > 0)
+    while (err > 0 || keepalive)
         __seg6_recv(sk, cb);
 
 out:
@@ -359,6 +372,7 @@ int main(int ac, char **av)
         int algo;
         char *binding_sid;
         char *nexthop;
+        int bind_op;
     } opts;
     int op = 0;
 #define OP_DUMP     1
@@ -385,6 +399,7 @@ int main(int ac, char **av)
             {"set-hmac", required_argument, 0, 0 },
             {"dump-hmac", no_argument, 0, 0 },
             {"bind-sid", required_argument, 0, 0 },
+            {"bind-op", required_argument, 0, 0 },
             {"nexthop", required_argument, 0, 0 },
             {"dump-bind", no_argument, 0, 0 },
             {"flush-bind", no_argument, 0, 0 },
@@ -411,6 +426,8 @@ int main(int ac, char **av)
                 op = OP_DUMPBIND;
             } else if (!strcmp(long_options[option_index].name, "flush-bind")) {
                 op = OP_FLUSHBIND;
+            } else if (!strcmp(long_options[option_index].name, "bind-op")) {
+                opts.bind_op = atoi(optarg);
             }
             break;
         case 's':
@@ -518,7 +535,12 @@ int main(int ac, char **av)
             nla_put(msg, SEG6_ATTR_SECRET, strlen(pass), pass);
         break;
     case OP_BINDSID:
-        if (!opts.nexthop) {
+        if (!opts.bind_op) {
+            fprintf(stderr, "Missing binding operation\n");
+            return 1;
+        }
+
+        if (!opts.nexthop && opts.bind_op == SEG6_BIND_ROUTE) {
             fprintf(stderr, "Missing nexthop for BINDSID operation\n");
             return 1;
         }
@@ -526,8 +548,22 @@ int main(int ac, char **av)
         genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_ADDBIND, 1);
         inet_pton(AF_INET6, opts.binding_sid, &in6);
         nla_put(msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &in6);
-        inet_pton(AF_INET6, opts.nexthop, &in6);
-        nla_put(msg, SEG6_ATTR_BIND_NEXTHOP, sizeof(struct in6_addr), &in6);
+        nla_put_u8(msg, SEG6_ATTR_BIND_OP, opts.bind_op);
+
+        switch (opts.bind_op) {
+            case SEG6_BIND_ROUTE:
+                inet_pton(AF_INET6, opts.nexthop, &in6);
+                nla_put(msg, SEG6_ATTR_BIND_DATA, sizeof(struct in6_addr), &in6);
+                nla_put_u32(msg, SEG6_ATTR_BIND_DATALEN, sizeof(struct in6_addr));
+                break;
+            case SEG6_BIND_SERVICE:
+                nla_put(msg, SEG6_ATTR_BIND_DATA, 0, NULL);
+                nla_put_u32(msg, SEG6_ATTR_BIND_DATALEN, 0);
+                break;
+            default:
+                fprintf(stderr, "Unknown binding operation\n");
+                return 1;
+        }
         break;
     case OP_DUMPBIND:
         genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_DUMPBIND, 1);
@@ -539,7 +575,7 @@ int main(int ac, char **av)
         usage(av[0]);
     }
 
-    nl_send_and_recv(nl_sk, msg);
+    nl_send_and_recv(nl_sk, msg, opts.bind_op == SEG6_BIND_SERVICE);
     if (errno)
         perror("nl_send_and_recv");
 
