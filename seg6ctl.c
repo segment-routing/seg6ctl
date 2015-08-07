@@ -22,84 +22,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <netlink/netlink.h>
-#include <netlink/genl/genl.h>
-#include <netlink/genl/ctrl.h>
-
-#define __unused __attribute__((unused))
-
-#define SEG6_BIND_NEXT      0   /* aka no-op, classical sr processing */
-#define SEG6_BIND_ROUTE     1   /* force route through given next hop */
-#define SEG6_BIND_INSERT    2   /* push segments in srh */
-#define SEG6_BIND_TRANSLATE 3   /* translate source/dst ? */
-#define SEG6_BIND_SERVICE   4   /* send packet to virtual service */
+#include "seg6.h"
 
 void usage(char *) __attribute__((noreturn));
-
-enum {
-    SEG6_ATTR_UNSPEC,
-    SEG6_ATTR_DST,
-    SEG6_ATTR_DSTLEN,
-    SEG6_ATTR_SEGLISTID,
-    SEG6_ATTR_FLAGS,
-    SEG6_ATTR_HMACKEYID,
-    SEG6_ATTR_SEGMENTS,
-    SEG6_ATTR_SEGLEN,
-    SEG6_ATTR_SEGINFO,
-    SEG6_ATTR_SECRET,
-    SEG6_ATTR_SECRETLEN,
-    SEG6_ATTR_ALGID,
-    SEG6_ATTR_HMACINFO,
-    SEG6_ATTR_BIND_OP,
-    SEG6_ATTR_BIND_DATA,
-    SEG6_ATTR_BIND_DATALEN,
-    SEG6_ATTR_BINDINFO,
-    SEG6_ATTR_PACKET_DATA,
-    SEG6_ATTR_PACKET_LEN,
-    __SEG6_ATTR_MAX,
-};
-
-#define SEG6_ATTR_MAX (__SEG6_ATTR_MAX - 1)
-
-enum {
-    SEG6_CMD_UNSPEC,
-    SEG6_CMD_ADDSEG,
-    SEG6_CMD_DELSEG,
-    SEG6_CMD_FLUSH,
-    SEG6_CMD_DUMP,
-    SEG6_CMD_SETHMAC,
-    SEG6_CMD_DUMPHMAC,
-    SEG6_CMD_ADDBIND,
-    SEG6_CMD_DELBIND,
-    SEG6_CMD_FLUSHBIND,
-    SEG6_CMD_DUMPBIND,
-    SEG6_CMD_PACKET_IN,
-    SEG6_CMD_PACKET_OUT,
-    __SEG6_CMD_MAX,
-};
-
-#define SEG6_CMD_MAX (__SEG6_CMD_MAX - 1)
-
-static struct nla_policy seg6_genl_policy[SEG6_ATTR_MAX + 1] = {
-    [SEG6_ATTR_DST]         = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
-    [SEG6_ATTR_DSTLEN]      = { .type = NLA_U32, },
-    [SEG6_ATTR_SEGLISTID]   = { .type = NLA_U16, },
-    [SEG6_ATTR_FLAGS]       = { .type = NLA_U32, },
-    [SEG6_ATTR_HMACKEYID]   = { .type = NLA_U8, },
-    [SEG6_ATTR_SEGMENTS]    = { .type = NLA_UNSPEC, },
-    [SEG6_ATTR_SEGLEN]      = { .type = NLA_U32, },
-    [SEG6_ATTR_SEGINFO]     = { .type = NLA_NESTED, },
-    [SEG6_ATTR_SECRET]      = { .type = NLA_UNSPEC, .maxlen = 64 },
-    [SEG6_ATTR_SECRETLEN]   = { .type = NLA_U8, },
-    [SEG6_ATTR_ALGID]       = { .type = NLA_U8, },
-    [SEG6_ATTR_HMACINFO]    = { .type = NLA_NESTED, },
-    [SEG6_ATTR_BIND_OP]         = { .type = NLA_U8, },
-    [SEG6_ATTR_BIND_DATA]       = { .type = NLA_UNSPEC, },
-    [SEG6_ATTR_BIND_DATALEN]    = { .type = NLA_U32, },
-    [SEG6_ATTR_BINDINFO]        = { .type = NLA_NESTED, },
-    [SEG6_ATTR_PACKET_DATA]     = { .type = NLA_UNSPEC, },
-    [SEG6_ATTR_PACKET_LEN]      = { .type = NLA_U32, },
-};
 
 void usage(char *av0)
 {
@@ -188,7 +113,7 @@ int process_delseg(struct nl_msg *msg, char *ddst, int id)
     return 0;
 }
 
-static void parse_dump(struct nlattr *attr)
+static void parse_dump(struct seg6_sock *sk __unused, struct nlattr **attr)
 {
     struct nlattr *a[SEG6_ATTR_MAX + 1];
 
@@ -202,10 +127,10 @@ static void parse_dump(struct nlattr *attr)
     int seg_len;
     int i;
 
-    if (!attr)
+    if (!attr || !attr[SEG6_ATTR_SEGINFO])
         return;
 
-    nla_parse_nested(a, SEG6_ATTR_MAX, attr, NULL);
+    nla_parse_nested(a, SEG6_ATTR_MAX, attr[SEG6_ATTR_SEGINFO], NULL);
     memcpy(&dst, nla_data(a[SEG6_ATTR_DST]), sizeof(struct in6_addr));
     dst_len = nla_get_u32(a[SEG6_ATTR_DSTLEN]);
     seg_id = nla_get_u16(a[SEG6_ATTR_SEGLISTID]);
@@ -227,18 +152,18 @@ static void parse_dump(struct nlattr *attr)
     free(segments);
 }
 
-static void parse_dumphmac(struct nlattr *attr)
+static void parse_dumphmac(struct seg6_sock *sk __unused, struct nlattr **attr)
 {
     struct nlattr *a[SEG6_ATTR_MAX + 1];
     int slen, algid, hmackey;
     char secret[64];
 
-    if (!attr)
+    if (!attr || !attr[SEG6_ATTR_HMACINFO])
         return;
 
     memset(secret, 0, 64);
 
-    nla_parse_nested(a, SEG6_ATTR_MAX, attr, NULL);
+    nla_parse_nested(a, SEG6_ATTR_MAX, attr[SEG6_ATTR_HMACINFO], NULL);
     slen = nla_get_u8(a[SEG6_ATTR_SECRETLEN]);
     memcpy(secret, nla_data(a[SEG6_ATTR_SECRET]), slen);
     algid = nla_get_u8(a[SEG6_ATTR_ALGID]);
@@ -247,7 +172,7 @@ static void parse_dumphmac(struct nlattr *attr)
     printf("hmac 0x%x algo %d secret \"%s\"\n", hmackey, algid, secret);
 }
 
-static void parse_dumpbind(struct nlattr *attr)
+static void parse_dumpbind(struct seg6_sock *sk __unused, struct nlattr **attr)
 {
     struct nlattr *a[SEG6_ATTR_MAX + 1];
     struct in6_addr dst, nexthop;
@@ -255,10 +180,10 @@ static void parse_dumpbind(struct nlattr *attr)
     int bop;
     uint32_t nlpid = 0;
 
-    if (!attr)
+    if (!attr || !attr[SEG6_ATTR_BINDINFO])
         return;
 
-    nla_parse_nested(a, SEG6_ATTR_MAX, attr, NULL);
+    nla_parse_nested(a, SEG6_ATTR_MAX, attr[SEG6_ATTR_BINDINFO], NULL);
     bop = nla_get_u8(a[SEG6_ATTR_BIND_OP]);
     memcpy(&dst, nla_data(a[SEG6_ATTR_DST]), sizeof(struct in6_addr));
 
@@ -276,89 +201,10 @@ static void parse_dumpbind(struct nlattr *attr)
     }
 }
 
-static int nl_recv_cb(struct nl_msg *msg, void *arg __unused)
-{
-    struct nlmsghdr *nlh = nlmsg_hdr(msg);
-    struct genlmsghdr *gnlh = nlmsg_data(nlh);
-    struct nlattr *attrs[SEG6_ATTR_MAX + 1];
-
-    if (genlmsg_parse(nlh, 0, attrs, SEG6_ATTR_MAX, seg6_genl_policy)) {
-        fprintf(stderr, "Unable to parse netlink message\n");
-        return NL_SKIP;
-    }
-
-    if (gnlh->cmd == SEG6_CMD_DUMP)
-        parse_dump(attrs[SEG6_ATTR_SEGINFO]);
-
-    if (gnlh->cmd == SEG6_CMD_DUMPHMAC)
-        parse_dumphmac(attrs[SEG6_ATTR_HMACINFO]);
-
-    if (gnlh->cmd == SEG6_CMD_DUMPBIND)
-        parse_dumpbind(attrs[SEG6_ATTR_BINDINFO]);
-
-    return NL_SKIP;
-}
-
-static int __seg6_recv(struct nl_sock *sk, struct nl_cb *cb)
-{
-    nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, nl_recv_cb, NULL);
-    return nl_recvmsgs(sk, cb);
-}
-
-static int nl_send_error(struct sockaddr_nl *nla __unused, struct nlmsgerr *err, void *arg)
-{
-    int *error = (int *)arg;
-
-    *error = err->error;
-    return NL_SKIP;
-}
-
-static int nl_send_ack(struct nl_msg *msg __unused, void *arg)
-{
-    int *error = (int *)arg;
-
-    *error = 0;
-    return NL_STOP;
-}
-
-static int nl_send_and_recv(struct nl_sock *sk, struct nl_msg *msg, int keepalive)
-{
-    struct nl_cb *cb;
-    int err = -ENOMEM;
-
-    cb = nl_cb_clone(nl_socket_get_cb(sk));
-    if (!cb)
-        goto out;
-
-    err = nl_send_auto_complete(sk, msg);
-    if (err < 0)
-        goto out;
-
-    err = 1;
-
-    nl_cb_err(cb, NL_CB_CUSTOM, nl_send_error, &err);
-    nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, nl_send_ack, &err);
-
-    while (err > 0 || keepalive)
-        __seg6_recv(sk, cb);
-
-out:
-    nl_cb_put(cb);
-    nlmsg_free(msg);
-    return err ? -(errno = -err) : 0;
-}
-
 int main(int ac, char **av)
 {
-    /* ./seg6ctl dump
-     *           flush
-     *           add dst/len id segment1,segment2,...,segmentN [cleanup] [hmac HMACKEYID]
-     *           del dst/len [id]
-     */
-
-    struct nl_sock *nl_sk;
+    struct seg6_sock *sk;
     struct nl_msg *msg;
-    int family_req;
     int c;
     char *pass;
     struct in6_addr in6;
@@ -462,34 +308,17 @@ int main(int ac, char **av)
     if (op == 0)
         usage(av[0]);
 
-    nl_sk = nl_socket_alloc();
-    if (!nl_sk) {
-        perror("nl_socket_alloc");
-        return 1;
-    }
-
-    if (genl_connect(nl_sk)) {
-        perror("genl_connect");
-        return 1;
-    }
-
-    family_req = genl_ctrl_resolve(nl_sk, "SEG6");
-
-    nl_socket_disable_seq_check(nl_sk);
-
-    msg = nlmsg_alloc();
-    if (!msg) {
-        perror("nlmsg_alloc");
-        return 1;
-    }
-
+    sk = seg6_socket_create();
+    seg6_set_callback(sk, SEG6_CMD_DUMP, parse_dump);
+    seg6_set_callback(sk, SEG6_CMD_DUMPHMAC, parse_dumphmac);
+    seg6_set_callback(sk, SEG6_CMD_DUMPBIND, parse_dumpbind);
 
     switch (op) {
     case OP_DUMP:
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_DUMP, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_DUMP);
         break;
     case OP_FLUSH:
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_FLUSH, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_FLUSH);
         break;
     case OP_ADD:
         if (!opts.prefix) {
@@ -497,7 +326,7 @@ int main(int ac, char **av)
             return 1;
         }
 
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_ADDSEG, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_ADDSEG);
         if (process_addseg(msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid, opts.tunnel))
             return 1;
         break;
@@ -507,12 +336,12 @@ int main(int ac, char **av)
             return 1;
         }
 
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_DELSEG, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_DELSEG);
         if (process_delseg(msg, opts.prefix, opts.id))
             return 1;
         break;
     case OP_DUMPHMAC:
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_DUMPHMAC, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_DUMPHMAC);
         break;
     case OP_SETHMAC:
         if (!opts.algo) {
@@ -527,7 +356,7 @@ int main(int ac, char **av)
 
         pass = getpass("Enter secret for HMAC key id: ");
 
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_SETHMAC, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_SETHMAC);
         nla_put_u8(msg, SEG6_ATTR_HMACKEYID, opts.hmackeyid);
         nla_put_u8(msg, SEG6_ATTR_ALGID, opts.algo);
         nla_put_u8(msg, SEG6_ATTR_SECRETLEN, strlen(pass));
@@ -545,7 +374,7 @@ int main(int ac, char **av)
             return 1;
         }
 
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_ADDBIND, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_ADDBIND);
         inet_pton(AF_INET6, opts.binding_sid, &in6);
         nla_put(msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &in6);
         nla_put_u8(msg, SEG6_ATTR_BIND_OP, opts.bind_op);
@@ -566,19 +395,20 @@ int main(int ac, char **av)
         }
         break;
     case OP_DUMPBIND:
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_DUMPBIND, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_DUMPBIND);
         break;
     case OP_FLUSHBIND:
-        genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, family_req, 0, NLM_F_REQUEST, SEG6_CMD_FLUSHBIND, 1);
+        msg = seg6_new_msg(sk, SEG6_CMD_FLUSHBIND);
         break;
     default:
         usage(av[0]);
     }
 
-    nl_send_and_recv(nl_sk, msg, opts.bind_op == SEG6_BIND_SERVICE);
+    seg6_send_msg(sk, msg, opts.bind_op == SEG6_BIND_SERVICE);
     if (errno)
-        perror("nl_send_and_recv");
+        perror("seg6_send_msg");
 
-    nl_socket_free(nl_sk);
+    seg6_socket_destroy(sk);
+
     return 0;
 }
