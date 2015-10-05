@@ -47,7 +47,7 @@ void usage(char *av0)
     exit(1);
 }
 
-int process_addseg(struct nl_msg *msg, char *ddst, int id, char *segs, int cleanup, uint8_t hmackeyid, int tunnel)
+int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int id, char *segs, int cleanup, uint8_t hmackeyid, int tunnel)
 {
     char *dst, *len, *seg;
     int i, seg_len;
@@ -64,16 +64,16 @@ int process_addseg(struct nl_msg *msg, char *ddst, int id, char *segs, int clean
     }
 
     inet_pton(AF_INET6, dst, &daddr);
-    nla_put(msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &daddr);
-    nla_put_u32(msg, SEG6_ATTR_DSTLEN, atoi(len));
-    nla_put_u16(msg, SEG6_ATTR_SEGLISTID, id);
-    nla_put_u32(msg, SEG6_ATTR_FLAGS, ((cleanup & 0x1) << 3) | ((tunnel & 0x1) << 1));
-    nla_put_u8(msg, SEG6_ATTR_HMACKEYID, hmackeyid);
+    nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &daddr);
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_DSTLEN, atoi(len));
+    nlmem_nla_put_u16(sk->nlm_sk, msg, SEG6_ATTR_SEGLISTID, id);
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_FLAGS, ((cleanup & 0x1) << 3) | ((tunnel & 0x1) << 1));
+    nlmem_nla_put_u8(sk->nlm_sk, msg, SEG6_ATTR_HMACKEYID, hmackeyid);
 
     for (i = 0; s[i]; s[i] == ',' ? i++ : *s++);
     seg_len = i+1;
 
-    nla_put_u32(msg, SEG6_ATTR_SEGLEN, seg_len);
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_SEGLEN, seg_len);
 
     segments = malloc(sizeof(struct in6_addr)*seg_len);
 
@@ -85,13 +85,13 @@ int process_addseg(struct nl_msg *msg, char *ddst, int id, char *segs, int clean
         i++;
     } while ((seg = strtok(NULL, ",")));
 
-    nla_put(msg, SEG6_ATTR_SEGMENTS, seg_len*sizeof(struct in6_addr), segments);
+    nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_SEGMENTS, seg_len*sizeof(struct in6_addr), segments);
 
     free(segments);
     return 0;
 }
 
-int process_delseg(struct nl_msg *msg, char *ddst, int id)
+int process_delseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int id)
 {
     char *dst, *len;
     struct in6_addr daddr;
@@ -106,9 +106,9 @@ int process_delseg(struct nl_msg *msg, char *ddst, int id)
 
     inet_pton(AF_INET6, dst, &daddr);
 
-    nla_put(msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &daddr);
-    nla_put_u32(msg, SEG6_ATTR_DSTLEN, atoi(len));
-    nla_put_u16(msg, SEG6_ATTR_SEGLISTID, id);
+    nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &daddr);
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_DSTLEN, atoi(len));
+    nlmem_nla_put_u16(sk->nlm_sk, msg, SEG6_ATTR_SEGLISTID, id);
 
     return 0;
 }
@@ -204,7 +204,7 @@ static void parse_dumpbind(struct seg6_sock *sk __unused, struct nlattr **attr)
 int main(int ac, char **av)
 {
     struct seg6_sock *sk;
-    struct nl_msg *msg;
+    struct nlmsghdr *msg;
     int c;
     char *pass;
     struct in6_addr in6;
@@ -221,6 +221,7 @@ int main(int ac, char **av)
         int bind_op;
     } opts;
     int op = 0;
+    int ret;
 #define OP_DUMP     1
 #define OP_FLUSH    2
 #define OP_ADD      4
@@ -308,7 +309,12 @@ int main(int ac, char **av)
     if (op == 0)
         usage(av[0]);
 
-    sk = seg6_socket_create();
+    sk = seg6_socket_create(getpagesize(), 64);
+    if (!sk) {
+        fprintf(stderr, "Cannot create netlink socket. Are you sure to be root ?\n");
+        return 1;
+    }
+
     seg6_set_callback(sk, SEG6_CMD_DUMP, parse_dump);
     seg6_set_callback(sk, SEG6_CMD_DUMPHMAC, parse_dumphmac);
     seg6_set_callback(sk, SEG6_CMD_DUMPBIND, parse_dumpbind);
@@ -327,7 +333,7 @@ int main(int ac, char **av)
         }
 
         msg = seg6_new_msg(sk, SEG6_CMD_ADDSEG);
-        if (process_addseg(msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid, opts.tunnel))
+        if (process_addseg(sk, msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid, opts.tunnel))
             return 1;
         break;
     case OP_DEL:
@@ -337,7 +343,7 @@ int main(int ac, char **av)
         }
 
         msg = seg6_new_msg(sk, SEG6_CMD_DELSEG);
-        if (process_delseg(msg, opts.prefix, opts.id))
+        if (process_delseg(sk, msg, opts.prefix, opts.id))
             return 1;
         break;
     case OP_DUMPHMAC:
@@ -357,11 +363,11 @@ int main(int ac, char **av)
         pass = getpass("Enter secret for HMAC key id: ");
 
         msg = seg6_new_msg(sk, SEG6_CMD_SETHMAC);
-        nla_put_u8(msg, SEG6_ATTR_HMACKEYID, opts.hmackeyid);
-        nla_put_u8(msg, SEG6_ATTR_ALGID, opts.algo);
-        nla_put_u8(msg, SEG6_ATTR_SECRETLEN, strlen(pass));
+        nlmem_nla_put_u8(sk->nlm_sk, msg, SEG6_ATTR_HMACKEYID, opts.hmackeyid);
+        nlmem_nla_put_u8(sk->nlm_sk, msg, SEG6_ATTR_ALGID, opts.algo);
+        nlmem_nla_put_u8(sk->nlm_sk, msg, SEG6_ATTR_SECRETLEN, strlen(pass));
         if (strlen(pass))
-            nla_put(msg, SEG6_ATTR_SECRET, strlen(pass), pass);
+            nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_SECRET, strlen(pass), pass);
         break;
     case OP_BINDSID:
         if (!opts.bind_op) {
@@ -376,18 +382,18 @@ int main(int ac, char **av)
 
         msg = seg6_new_msg(sk, SEG6_CMD_ADDBIND);
         inet_pton(AF_INET6, opts.binding_sid, &in6);
-        nla_put(msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &in6);
-        nla_put_u8(msg, SEG6_ATTR_BIND_OP, opts.bind_op);
+        nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &in6);
+        nlmem_nla_put_u8(sk->nlm_sk, msg, SEG6_ATTR_BIND_OP, opts.bind_op);
 
         switch (opts.bind_op) {
             case SEG6_BIND_ROUTE:
                 inet_pton(AF_INET6, opts.nexthop, &in6);
-                nla_put(msg, SEG6_ATTR_BIND_DATA, sizeof(struct in6_addr), &in6);
-                nla_put_u32(msg, SEG6_ATTR_BIND_DATALEN, sizeof(struct in6_addr));
+                nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_BIND_DATA, sizeof(struct in6_addr), &in6);
+                nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_BIND_DATALEN, sizeof(struct in6_addr));
                 break;
             case SEG6_BIND_SERVICE:
-                nla_put(msg, SEG6_ATTR_BIND_DATA, 0, NULL);
-                nla_put_u32(msg, SEG6_ATTR_BIND_DATALEN, 0);
+                nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_BIND_DATA, 0, NULL);
+                nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_BIND_DATALEN, 0);
                 break;
             default:
                 fprintf(stderr, "Unknown binding operation\n");
@@ -404,9 +410,9 @@ int main(int ac, char **av)
         usage(av[0]);
     }
 
-    seg6_send_msg(sk, msg, opts.bind_op == SEG6_BIND_SERVICE);
-    if (errno)
-        perror("seg6_send_msg");
+    ret = seg6_send_and_recv(sk, msg, NULL);
+    if (ret)
+        fprintf(stderr, "seg6_send_and_recv(): %s\n", strerror(ret));
 
     seg6_socket_destroy(sk);
 

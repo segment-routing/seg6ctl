@@ -12,9 +12,23 @@ int counter;
 void usage(char *) __attribute__((noreturn));
 
 /* just count packets */
-void parse_packet_in(struct seg6_sock *sk __unused, struct nlattr **attrs __unused)
+void parse_packet_in(struct seg6_sock *sk, struct nlattr **attrs)
 {
+    int pkt_len;
+    char *pkt_data;
+    struct nlmsghdr *msg;
+
     ++counter;
+
+    pkt_len = nla_get_u32(attrs[SEG6_ATTR_PACKET_LEN]);
+    pkt_data = nla_data(attrs[SEG6_ATTR_PACKET_DATA]);
+
+    msg = nlmem_msg_create(sk->nlm_sk, SEG6_CMD_PACKET_OUT, NLM_F_REQUEST);
+
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_PACKET_LEN, pkt_len);
+    nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_PACKET_DATA, pkt_len, pkt_data);
+
+    nlmem_send_msg(sk->nlm_sk, msg);
 }
 
 void usage(char *av0)
@@ -63,7 +77,7 @@ int main(int ac, char **av)
 
     nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &in6);
     nlmem_nla_put_u8(sk->nlm_sk, msg, SEG6_ATTR_BIND_OP, SEG6_BIND_SERVICE);
-    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_FLAGS, 0x1); /* non-blocking */
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_FLAGS, 0); /* blocking */
     nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_BIND_DATA, 0, NULL);
     nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_BIND_DATALEN, 0);
 

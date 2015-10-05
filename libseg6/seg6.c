@@ -14,6 +14,9 @@
 #include <netlink/genl/genl.h>
 #include <netlink/genl/ctrl.h>
 #include "seg6.h"
+#include "nlmem.h"
+
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
 
 static struct nla_policy seg6_genl_policy[SEG6_ATTR_MAX + 1] = {
     [SEG6_ATTR_DST]         = { .type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr) },
@@ -36,26 +39,26 @@ static struct nla_policy seg6_genl_policy[SEG6_ATTR_MAX + 1] = {
     [SEG6_ATTR_PACKET_LEN]      = { .type = NLA_U32, },
 };
 
-struct seg6_sock *seg6_socket_create(void)
+struct seg6_sock *seg6_socket_create(int block_size, int block_nr)
 {
-    struct nl_sock *nl_sk;
-    int family_req;
+    struct nlmem_sock *nlm_sk;
     struct seg6_sock *sk;
     long i;
+    int frame_size = MIN(16384, block_size);
+
+    struct nl_mmap_req req = {
+        .nm_block_size  = block_size,
+        .nm_block_nr    = block_nr,
+        .nm_frame_size  = frame_size,
+        .nm_frame_nr    = block_nr * block_size / frame_size,
+    };
+
+    nlm_sk = nlmem_sock_create(&req, "SEG6");
+    if (!nlm_sk)
+        return NULL;
 
     sk = malloc(sizeof(*sk));
-
-    nl_sk = nl_socket_alloc();
-    if (genl_connect(nl_sk)) {
-        perror("genl_connect");
-        return NULL;
-    }
-
-    family_req = genl_ctrl_resolve(nl_sk, "SEG6");
-    nl_socket_disable_seq_check(nl_sk);
-
-    sk->nl_sk = nl_sk;
-    sk->family_req = family_req;
+    sk->nlm_sk = nlm_sk;
 
     sk->callbacks = malloc(__SEG6_CMD_MAX*2*sizeof(void *));
     for (i = 0; i < __SEG6_CMD_MAX; i++) {
@@ -68,17 +71,16 @@ struct seg6_sock *seg6_socket_create(void)
 
 void seg6_socket_destroy(struct seg6_sock *sk)
 {
-    nl_socket_free(sk->nl_sk);
+    nlmem_sock_destroy(sk->nlm_sk);
     free(sk);
 }
 
-struct nl_msg *seg6_new_msg(struct seg6_sock *sk, int cmd)
+struct nlmsghdr *seg6_new_msg(struct seg6_sock *sk, int cmd)
 {
-    struct nl_msg *msg;
+    struct nlmsghdr *msg;
 
-    msg = nlmsg_alloc();
+    msg = nlmem_msg_create(sk->nlm_sk, cmd, NLM_F_REQUEST | NLM_F_ACK);
 
-    genlmsg_put(msg, NL_AUTO_PID, NL_AUTO_SEQ, sk->family_req, 0, NLM_F_REQUEST, cmd, 1);
     return msg;
 }
 
@@ -87,17 +89,16 @@ void seg6_set_callback(struct seg6_sock *sk, int cmd, void (*callback)(struct se
     sk->callbacks[cmd*2+1] = callback;
 }
 
-static int nl_recv_cb(struct nl_msg *msg, void *arg)
+static int nl_recv_cb(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *msg, void *arg)
 {
-    struct nlmsghdr *nlh = nlmsg_hdr(msg);
-    struct genlmsghdr *gnlh = nlmsg_data(nlh);
+    struct genlmsghdr *gnlh = nlmsg_data(msg);
     struct nlattr *attrs[SEG6_ATTR_MAX + 1];
     struct seg6_sock *sk;
     void (*callback)(struct seg6_sock *, struct nlattr **);
 
     sk = (struct seg6_sock *)arg;
 
-    if (genlmsg_parse(nlh, 0, attrs, SEG6_ATTR_MAX, seg6_genl_policy)) {
+    if (genlmsg_parse(msg, 0, attrs, SEG6_ATTR_MAX, seg6_genl_policy)) {
         perror("genlmsg_parse");
         return NL_SKIP;
     }
@@ -109,56 +110,56 @@ static int nl_recv_cb(struct nl_msg *msg, void *arg)
     return NL_SKIP;
 }
 
-static int __seg6_recv(struct seg6_sock *sk, struct nl_cb *cb)
+static int nl_recv_err(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *hdr, void *arg)
 {
-    nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, nl_recv_cb, sk);
-    return nl_recvmsgs(sk->nl_sk, cb);
-}
-
-static int nl_send_error(struct sockaddr_nl *nla __unused, struct nlmsgerr *err, void *arg)
-{
-    int *error = (int *)arg;
+    int *error = arg;
+    struct nlmsgerr *err = nlmsg_data(hdr);
 
     *error = err->error;
-    return NL_SKIP;
-}
 
-static int nl_send_ack(struct nl_msg *msg __unused, void *arg)
-{
-    int *error = (int *)arg;
-
-    *error = 0;
     return NL_STOP;
 }
 
-static int nl_send_and_recv(struct seg6_sock *sk, struct nl_msg *msg, int keepalive)
+static int nl_recv_ack(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *hdr __unused, void *arg)
 {
-    struct nl_cb *cb;
-    int err = -ENOMEM;
+    int *error = arg;
 
-    cb = nl_cb_clone(nl_socket_get_cb(sk->nl_sk));
-    if (!cb)
-        goto out;
+    *error = 0;
 
-    err = nl_send_auto_complete(sk->nl_sk, msg);
-    if (err < 0)
-        goto out;
-
-    err = 1;
-
-    nl_cb_err(cb, NL_CB_CUSTOM, nl_send_error, &err);
-    nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, nl_send_ack, &err);
-
-    while (err > 0 || keepalive)
-        __seg6_recv(sk, cb);
-
-out:
-    nl_cb_put(cb);
-    nlmsg_free(msg);
-    return err ? -(errno = -err) : 0;
+    return NL_STOP;
 }
 
-int seg6_send_msg(struct seg6_sock *sk, struct nl_msg *msg, int keepalive)
+static int nl_recv_invalid(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *hdr __unused, void *arg __unused)
 {
-    return nl_send_and_recv(sk, msg, keepalive);
+    return NL_STOP;
+}
+
+int seg6_send_and_recv(struct seg6_sock *sk, struct nlmsghdr *msg, struct nlmem_cb *ucb)
+{
+    struct nlmem_cb *cb;
+    int err = 0;
+
+    nlmem_send_msg(sk->nlm_sk, msg);
+
+    cb = &sk->nlm_sk->cb;
+
+    nlmem_set_cb(cb, NLMEM_CB_VALID, nl_recv_cb, sk);
+    nlmem_set_cb(cb, NLMEM_CB_ACK, nl_recv_ack, &err);
+    nlmem_set_cb(cb, NLMEM_CB_ERR, nl_recv_err, &err);
+    nlmem_set_cb(cb, NLMEM_CB_INVALID, nl_recv_invalid, sk);
+
+    if (ucb) {
+        if (ucb->cb_set[NLMEM_CB_VALID])
+            nlmem_set_cb(cb, NLMEM_CB_VALID, ucb->cb_set[NLMEM_CB_VALID], ucb->cb_args[NLMEM_CB_VALID]);
+        if (ucb->cb_set[NLMEM_CB_ACK])
+            nlmem_set_cb(cb, NLMEM_CB_ACK, ucb->cb_set[NLMEM_CB_ACK], ucb->cb_args[NLMEM_CB_ACK]);
+        if (ucb->cb_set[NLMEM_CB_ERR])
+            nlmem_set_cb(cb, NLMEM_CB_ERR, ucb->cb_set[NLMEM_CB_ERR], ucb->cb_args[NLMEM_CB_ERR]);
+        if (ucb->cb_set[NLMEM_CB_INVALID])
+            nlmem_set_cb(cb, NLMEM_CB_INVALID, ucb->cb_set[NLMEM_CB_INVALID], ucb->cb_args[NLMEM_CB_INVALID]);
+    }
+
+    nlmem_recv_loop(sk->nlm_sk, cb);
+
+    return err;
 }

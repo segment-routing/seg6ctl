@@ -5,6 +5,15 @@
 #include <netlink/genl/genl.h>
 #include <netlink/genl/ctrl.h>
 
+#include <asm/byteorder.h>
+#include <stdint.h>
+
+#include "nlmem.h"
+
+#ifndef __u8
+#define __u8 uint8_t
+#endif
+
 #define __unused __attribute__((unused))
 
 #define SEG6_BIND_NEXT      0   /* aka no-op, classical sr processing */
@@ -58,15 +67,40 @@ enum {
 #define SEG6_CMD_MAX (__SEG6_CMD_MAX - 1)
 
 struct seg6_sock {
-    struct nl_sock *nl_sk;
-    int family_req;
+    struct nlmem_sock *nlm_sk;
     void **callbacks;
 };
 
-struct seg6_sock *seg6_socket_create(void);
+struct seg6_sock *seg6_socket_create(int, int);
 void seg6_socket_destroy(struct seg6_sock *);
-struct nl_msg *seg6_new_msg(struct seg6_sock *, int);
+struct nlmsghdr *seg6_new_msg(struct seg6_sock *, int);
 void seg6_set_callback(struct seg6_sock *, int, void (*)(struct seg6_sock *, struct nlattr **));
-int seg6_send_msg(struct seg6_sock *, struct nl_msg *, int);
+int seg6_send_and_recv(struct seg6_sock *, struct nlmsghdr *, struct nlmem_cb *);
+
+struct ipv6_sr_hdr {
+    __u8        nexthdr;
+    __u8        hdrlen;          // 8-octet units
+    __u8        type;
+    __u8        segments_left;
+    __u8        first_segment;
+
+#if defined(__BIG_ENDIAN_BITFIELD)
+    __u8        flags : 4,
+                pol1_flags : 4;
+    __u8        pol2_flags : 4,
+                pol3_flags : 4;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+    __u8        pol1_flags : 4,
+                flags : 4;
+    __u8        pol3_flags : 4,
+                pol2_flags : 4;
+#else
+#error "Please fix <asm/byteorder.h>"
+#endif
+
+    __u8        hmackeyid;
+
+    struct in6_addr segments[0];
+} __attribute__((packed));
 
 #endif
