@@ -412,7 +412,7 @@ int main(int ac, char **av)
 
     ret = seg6_send_and_recv(sk, msg, NULL);
     if (ret)
-        fprintf(stderr, "seg6_send_and_recv(): %s\n", strerror(ret));
+        fprintf(stderr, "seg6_send_and_recv(): %s\n", strerror(-ret));
 
     seg6_socket_destroy(sk);
 
