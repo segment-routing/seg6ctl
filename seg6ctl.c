@@ -34,7 +34,6 @@ void usage(char *av0)
                     "\t\t[-d|--delete]\n"
                     "\t\t[-p PREFIX/LEN|--prefix PREFIX/LEN]\n"
                     "\t\t[--cleanup]\n"
-                    "\t\t[--tunnel]\n"
                     "\t\t[-m KEYID|--hmackeyid KEYID]\n"
                     "\t\t[-i SEGLISTID|--id SEGLISTID]\n"
                     "\t\t[--set-hmac ALGO]\n"
@@ -47,7 +46,7 @@ void usage(char *av0)
     exit(1);
 }
 
-int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int id, char *segs, int cleanup, uint8_t hmackeyid, int tunnel)
+int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int id, char *segs, int cleanup, uint8_t hmackeyid)
 {
     char *dst, *len, *seg;
     int i, seg_len;
@@ -67,7 +66,7 @@ int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int i
     nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &daddr);
     nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_DSTLEN, atoi(len));
     nlmem_nla_put_u16(sk->nlm_sk, msg, SEG6_ATTR_SEGLISTID, id);
-    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_FLAGS, ((cleanup & 0x1) << 3) | ((tunnel & 0x1) << 1));
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_FLAGS, ((cleanup & 0x1) << 3));
     nlmem_nla_put_u8(sk->nlm_sk, msg, SEG6_ATTR_HMACKEYID, hmackeyid);
 
     for (i = 0; s[i]; s[i] == ',' ? i++ : *s++);
@@ -148,7 +147,7 @@ static void parse_dump(struct seg6_sock *sk __unused, struct nlattr **attr)
         inet_ntop(AF_INET6, &segments[i], ip6, 40);
         printf("%s%c", ip6, (i == seg_len - 1) ? 0 : ' ');
     }
-    printf("] id %d hmac 0x%x %s%s\n", seg_id, hmackeyid, (flags & 0x8) ? "cleanup " : "", (flags & 0x2) ? "tunnel" : "");
+    printf("] id %d hmac 0x%x %s\n", seg_id, hmackeyid, (flags & 0x8) ? "cleanup " : "");
     free(segments);
 }
 
@@ -211,7 +210,6 @@ int main(int ac, char **av)
     static struct {
         uint16_t id;
         int cleanup;
-        int tunnel;
         uint8_t hmackeyid;
         char *prefix;
         char *segments;
@@ -240,7 +238,6 @@ int main(int ac, char **av)
             {"del",     no_argument,        0, 'd'},
             {"prefix",  required_argument,  0, 'p'},
             {"cleanup", no_argument,        &opts.cleanup, 1},
-            {"tunnel", no_argument, &opts.tunnel, 1},
             {"hmackeyid", required_argument, 0, 'm'},
             {"id",      required_argument,  0, 'i'},
             {"set-hmac", required_argument, 0, 0 },
@@ -333,7 +330,7 @@ int main(int ac, char **av)
         }
 
         msg = seg6_new_msg(sk, SEG6_CMD_ADDSEG);
-        if (process_addseg(sk, msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid, opts.tunnel))
+        if (process_addseg(sk, msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid))
             return 1;
         break;
     case OP_DEL:

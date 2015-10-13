@@ -16,11 +16,12 @@
 
 #define __unused __attribute__((unused))
 
-#define SEG6_BIND_NEXT      0   /* aka no-op, classical sr processing */
-#define SEG6_BIND_ROUTE     1   /* force route through given next hop */
-#define SEG6_BIND_INSERT    2   /* push segments in srh */
-#define SEG6_BIND_TRANSLATE 3   /* translate source/dst ? */
-#define SEG6_BIND_SERVICE   4   /* send packet to virtual service */
+#define SEG6_BIND_NEXT          0   /* aka no-op, classical sr processing */
+#define SEG6_BIND_ROUTE         1   /* force route through given next hop */
+#define SEG6_BIND_INSERT        2   /* push segments in srh */
+#define SEG6_BIND_TRANSLATE     3   /* translate source/dst ? */
+#define SEG6_BIND_SERVICE       4   /* send packet to virtual service */
+#define SEG6_BIND_OVERRIDE_NEXT 5   /* override next segment (break HMAC) */
 
 enum {
     SEG6_ATTR_UNSPEC,
