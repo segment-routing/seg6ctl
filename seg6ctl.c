@@ -42,11 +42,12 @@ void usage(char *av0)
                     "\t\t[--nexthop SEGMENT]\n"
                     "\t\t[--dump-bind]\n"
                     "\t\t[--flush-bind]\n"
-                    "\t\t[--bind-op OPERATION]\n", av0);
+                    "\t\t[--bind-op OPERATION]\n"
+                    "\t\t[--egress-present]\n", av0);
     exit(1);
 }
 
-int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int id, char *segs, int cleanup, uint8_t hmackeyid)
+int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int id, char *segs, int cleanup, uint8_t hmackeyid, int egress)
 {
     char *dst, *len, *seg;
     int i, seg_len;
@@ -66,20 +67,19 @@ int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int i
     nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &daddr);
     nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_DSTLEN, atoi(len));
     nlmem_nla_put_u16(sk->nlm_sk, msg, SEG6_ATTR_SEGLISTID, id);
-    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_FLAGS, ((cleanup & 0x1) << 3));
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_FLAGS, ((cleanup & 0x1) << 3) | ((egress & 0x1) << 4));
     nlmem_nla_put_u8(sk->nlm_sk, msg, SEG6_ATTR_HMACKEYID, hmackeyid);
 
     for (i = 0; s[i]; s[i] == ',' ? i++ : *s++);
-    seg_len = i+1;
+    seg_len = i+1+!egress;
 
     nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_SEGLEN, seg_len);
 
-    segments = malloc(sizeof(struct in6_addr)*seg_len);
+    segments = calloc(seg_len, sizeof(struct in6_addr));
 
     i = 0;
     seg = strtok(segs, ",");
     do {
-        memset(&segments[i].s6_addr, 0, 16);
         inet_pton(AF_INET6, seg, &segments[i]);
         i++;
     } while ((seg = strtok(NULL, ",")));
@@ -145,7 +145,7 @@ static void parse_dump(struct seg6_sock *sk __unused, struct nlattr **attr)
     printf("%s/%d via %d segs [", ip6, dst_len, seg_len);
     for (i = 0; i < seg_len; i++) {
         inet_ntop(AF_INET6, &segments[i], ip6, 40);
-        printf("%s%c", ip6, (i == seg_len - 1) ? 0 : ' ');
+        printf("%s%c", (i == seg_len - 1 && (!(flags & 0x10))) ? "<dest>" : ip6, (i == seg_len - 1) ? 0 : ' ');
     }
     printf("] id %d hmac 0x%x %s\n", seg_id, hmackeyid, (flags & 0x8) ? "cleanup " : "");
     free(segments);
@@ -217,6 +217,7 @@ int main(int ac, char **av)
         char *binding_sid;
         char *nexthop;
         int bind_op;
+        int egress;
     } opts;
     int op = 0;
     int ret;
@@ -247,6 +248,7 @@ int main(int ac, char **av)
             {"nexthop", required_argument, 0, 0 },
             {"dump-bind", no_argument, 0, 0 },
             {"flush-bind", no_argument, 0, 0 },
+            {"egress-present", no_argument, &opts.egress, 1},
             {0, 0, 0, 0}
         };
     int option_index = 0;
@@ -330,7 +332,7 @@ int main(int ac, char **av)
         }
 
         msg = seg6_new_msg(sk, SEG6_CMD_ADDSEG);
-        if (process_addseg(sk, msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid))
+        if (process_addseg(sk, msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid, opts.egress))
             return 1;
         break;
     case OP_DEL:
