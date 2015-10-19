@@ -43,6 +43,8 @@ enum {
     SEG6_ATTR_BINDINFO,
     SEG6_ATTR_PACKET_DATA,
     SEG6_ATTR_PACKET_LEN,
+    SEG6_ATTR_POLICY_DATA,
+    SEG6_ATTR_POLICY_LEN,
     __SEG6_ATTR_MAX,
 };
 
@@ -103,5 +105,10 @@ struct ipv6_sr_hdr {
 
     struct in6_addr segments[0];
 } __attribute__((packed));
+
+struct seg6_policy {
+    unsigned int flags;
+    struct in6_addr entry;
+};
 
 #endif

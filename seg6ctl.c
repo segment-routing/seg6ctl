@@ -43,11 +43,12 @@ void usage(char *av0)
                     "\t\t[--dump-bind]\n"
                     "\t\t[--flush-bind]\n"
                     "\t\t[--bind-op OPERATION]\n"
-                    "\t\t[--egress-present]\n", av0);
+                    "\t\t[--egress-present]\n"
+                    "\t\t[--set-policy FLAGS,ADDR]\n", av0);
     exit(1);
 }
 
-int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int id, char *segs, int cleanup, uint8_t hmackeyid, int egress)
+int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int id, char *segs, int cleanup, uint8_t hmackeyid, int egress, struct seg6_policy *pol, int pol_idx)
 {
     char *dst, *len, *seg;
     int i, seg_len;
@@ -85,6 +86,9 @@ int process_addseg(struct seg6_sock *sk, struct nlmsghdr *msg, char *ddst, int i
     } while ((seg = strtok(NULL, ",")));
 
     nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_SEGMENTS, seg_len*sizeof(struct in6_addr), segments);
+
+    nlmem_nla_put_u32(sk->nlm_sk, msg, SEG6_ATTR_POLICY_LEN, pol_idx*sizeof(struct seg6_policy));
+    nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_POLICY_DATA, pol_idx*sizeof(struct seg6_policy), pol);
 
     free(segments);
     return 0;
@@ -125,6 +129,8 @@ static void parse_dump(struct seg6_sock *sk __unused, struct nlattr **attr)
     struct in6_addr *segments;
     int seg_len;
     int i;
+    struct seg6_policy pol[4];
+    int pol_idx;
 
     if (!attr || !attr[SEG6_ATTR_SEGINFO])
         return;
@@ -136,9 +142,13 @@ static void parse_dump(struct seg6_sock *sk __unused, struct nlattr **attr)
     flags = nla_get_u32(a[SEG6_ATTR_FLAGS]);
     hmackeyid = nla_get_u8(a[SEG6_ATTR_HMACKEYID]);
     seg_len = nla_get_u32(a[SEG6_ATTR_SEGLEN]);
+    pol_idx = nla_get_u32(a[SEG6_ATTR_POLICY_LEN]);
 
     segments = malloc(seg_len*sizeof(struct in6_addr));
     memcpy(segments, nla_data(a[SEG6_ATTR_SEGMENTS]), seg_len*sizeof(struct in6_addr));
+
+    memcpy(pol, nla_data(a[SEG6_ATTR_POLICY_DATA]), pol_idx);
+    pol_idx /= sizeof(struct seg6_policy);
 
     inet_ntop(AF_INET6, &dst, ip6, 40);
 
@@ -147,7 +157,13 @@ static void parse_dump(struct seg6_sock *sk __unused, struct nlattr **attr)
         inet_ntop(AF_INET6, &segments[i], ip6, 40);
         printf("%s%c", (i == seg_len - 1 && (!(flags & 0x10))) ? "<dest>" : ip6, (i == seg_len - 1) ? 0 : ' ');
     }
-    printf("] id %d hmac 0x%x %s\n", seg_id, hmackeyid, (flags & 0x8) ? "cleanup " : "");
+    printf("] id %d hmac 0x%x %s", seg_id, hmackeyid, (flags & 0x8) ? "cleanup " : "");
+    for (i = 0; i < pol_idx; i++) {
+        inet_ntop(AF_INET6, &pol[i].entry, ip6, 40);
+        printf("policy type %d entry %s%c", pol[i].flags, ip6, (i == pol_idx - 1) ? 0 : ' ');
+    }
+    printf("\n");
+
     free(segments);
 }
 
@@ -218,6 +234,8 @@ int main(int ac, char **av)
         char *nexthop;
         int bind_op;
         int egress;
+        struct seg6_policy pol[4];
+        int pol_idx;
     } opts;
     int op = 0;
     int ret;
@@ -249,6 +267,7 @@ int main(int ac, char **av)
             {"dump-bind", no_argument, 0, 0 },
             {"flush-bind", no_argument, 0, 0 },
             {"egress-present", no_argument, &opts.egress, 1},
+            {"set-policy", required_argument, 0, 0},
             {0, 0, 0, 0}
         };
     int option_index = 0;
@@ -274,6 +293,13 @@ int main(int ac, char **av)
                 op = OP_FLUSHBIND;
             } else if (!strcmp(long_options[option_index].name, "bind-op")) {
                 opts.bind_op = atoi(optarg);
+            } else if (!strcmp(long_options[option_index].name, "set-policy")) {
+                char *flags, *addr;
+                flags = strtok(optarg, ",");
+                addr = strtok(NULL, ",");
+                opts.pol[opts.pol_idx].flags = atoi(flags);
+                inet_pton(AF_INET6, addr, &opts.pol[opts.pol_idx].entry);
+                opts.pol_idx++;
             }
             break;
         case 's':
@@ -332,7 +358,7 @@ int main(int ac, char **av)
         }
 
         msg = seg6_new_msg(sk, SEG6_CMD_ADDSEG);
-        if (process_addseg(sk, msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid, opts.egress))
+        if (process_addseg(sk, msg, opts.prefix, opts.id, opts.segments, opts.cleanup, opts.hmackeyid, opts.egress, opts.pol, opts.pol_idx))
             return 1;
         break;
     case OP_DEL:

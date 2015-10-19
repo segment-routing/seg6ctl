@@ -37,6 +37,8 @@ static struct nla_policy seg6_genl_policy[SEG6_ATTR_MAX + 1] = {
     [SEG6_ATTR_BINDINFO]        = { .type = NLA_NESTED, },
     [SEG6_ATTR_PACKET_DATA]     = { .type = NLA_UNSPEC, },
     [SEG6_ATTR_PACKET_LEN]      = { .type = NLA_U32, },
+    [SEG6_ATTR_POLICY_DATA]     = { .type = NLA_UNSPEC, },
+    [SEG6_ATTR_POLICY_LEN]      = { .type = NLA_U32, },
 };
 
 struct seg6_sock *seg6_socket_create(int block_size, int block_nr)
