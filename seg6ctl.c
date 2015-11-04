@@ -44,7 +44,8 @@ void usage(char *av0)
                     "\t\t[--flush-bind]\n"
                     "\t\t[--bind-op OPERATION]\n"
                     "\t\t[--egress-present]\n"
-                    "\t\t[--set-policy FLAGS,ADDR]\n", av0);
+                    "\t\t[--set-policy FLAGS,ADDR]\n"
+                    "\t\t[--set-tunsrc ADDR]\n", av0);
     exit(1);
 }
 
@@ -236,6 +237,7 @@ int main(int ac, char **av)
         int egress;
         struct seg6_policy pol[4];
         int pol_idx;
+        char *tunsrc;
     } opts;
     int op = 0;
     int ret;
@@ -248,6 +250,7 @@ int main(int ac, char **av)
 #define OP_BINDSID  8
 #define OP_DUMPBIND 9
 #define OP_FLUSHBIND 10
+#define OP_SETTUNSRC 11
 
     static struct option long_options[] = 
         {
@@ -268,6 +271,7 @@ int main(int ac, char **av)
             {"flush-bind", no_argument, 0, 0 },
             {"egress-present", no_argument, &opts.egress, 1},
             {"set-policy", required_argument, 0, 0},
+            {"set-tunsrc", required_argument, 0, 0},
             {0, 0, 0, 0}
         };
     int option_index = 0;
@@ -300,6 +304,9 @@ int main(int ac, char **av)
                 opts.pol[opts.pol_idx].flags = atoi(flags);
                 inet_pton(AF_INET6, addr, &opts.pol[opts.pol_idx].entry);
                 opts.pol_idx++;
+            } else if (!strcmp(long_options[option_index].name, "set-tunsrc")) {
+                op = OP_SETTUNSRC;
+                opts.tunsrc = optarg;
             }
             break;
         case 's':
@@ -430,6 +437,11 @@ int main(int ac, char **av)
         break;
     case OP_FLUSHBIND:
         msg = seg6_new_msg(sk, SEG6_CMD_FLUSHBIND);
+        break;
+    case OP_SETTUNSRC:
+        msg = seg6_new_msg(sk, SEG6_CMD_SET_TUNSRC);
+        inet_pton(AF_INET6, opts.tunsrc, &in6);
+        nlmem_nla_put(sk->nlm_sk, msg, SEG6_ATTR_DST, sizeof(struct in6_addr), &in6);
         break;
     default:
         usage(av[0]);
