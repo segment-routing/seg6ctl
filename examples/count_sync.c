@@ -12,7 +12,8 @@ int counter;
 void usage(char *) __attribute__((noreturn));
 
 /* just count packets */
-void parse_packet_in(struct seg6_sock *sk, struct nlattr **attrs)
+void parse_packet_in(struct seg6_sock *sk, struct nlattr **attrs,
+        struct nlmsghdr *nlh __unused)
 {
     int pkt_len;
     char *pkt_data;
@@ -63,7 +64,7 @@ int main(int ac, char **av)
 
     inet_pton(AF_INET6, av[1], &in6);
 
-    /* 
+    /*
      * seg6_socket_create(block_size, block_nr)
      * mem usage = block_size * block_nr * 2
      * default settings = 8MB usage for 4K pages

@@ -86,7 +86,7 @@ struct nlmsghdr *seg6_new_msg(struct seg6_sock *sk, int cmd)
     return msg;
 }
 
-void seg6_set_callback(struct seg6_sock *sk, int cmd, void (*callback)(struct seg6_sock *, struct nlattr **))
+void seg6_set_callback(struct seg6_sock *sk, int cmd, void (*callback)(struct seg6_sock *, struct nlattr **, struct nlmsghdr *))
 {
     sk->callbacks[cmd*2+1] = callback;
 }
@@ -96,7 +96,7 @@ static int nl_recv_cb(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *msg, 
     struct genlmsghdr *gnlh = nlmsg_data(msg);
     struct nlattr *attrs[SEG6_ATTR_MAX + 1];
     struct seg6_sock *sk;
-    void (*callback)(struct seg6_sock *, struct nlattr **);
+    void (*callback)(struct seg6_sock *, struct nlattr **, struct nlmsghdr *);
 
     sk = (struct seg6_sock *)arg;
 
@@ -107,7 +107,7 @@ static int nl_recv_cb(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *msg, 
 
     callback = sk->callbacks[gnlh->cmd*2+1];
     if (callback)
-        callback(sk, attrs);
+        callback(sk, attrs, msg);
 
     return NL_SKIP;
 }

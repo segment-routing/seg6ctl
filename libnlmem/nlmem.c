@@ -155,6 +155,8 @@ struct nlmem_sock *nlmem_sock_create(struct nl_mmap_req *req, const char *family
     sk->rx_ring = rx_ring;
     sk->tx_ring = tx_ring;
 
+    sk->delayed_release = 0;
+
     return sk;
 
 err_close:
@@ -359,7 +361,11 @@ skip:
             }
 
 release:
-            hdr->nm_status = NL_MMAP_STATUS_UNUSED;
+            if (!sk->delayed_release)
+                hdr->nm_status = NL_MMAP_STATUS_UNUSED;
+            else
+                hdr->nm_status = NL_MMAP_STATUS_SKIP;
+
             advance_rx_frame(sk);
         }
     }

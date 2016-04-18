@@ -74,7 +74,7 @@ struct seg6_sock {
 struct seg6_sock *seg6_socket_create(int, int);
 void seg6_socket_destroy(struct seg6_sock *);
 struct nlmsghdr *seg6_new_msg(struct seg6_sock *, int);
-void seg6_set_callback(struct seg6_sock *, int, void (*)(struct seg6_sock *, struct nlattr **));
+void seg6_set_callback(struct seg6_sock *, int, void (*)(struct seg6_sock *, struct nlattr **, struct nlmsghdr *));
 int seg6_send_and_recv(struct seg6_sock *, struct nlmsghdr *, struct nlmem_cb *);
 
 struct ipv6_sr_hdr {
