@@ -325,6 +325,7 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
                 if (len == 0)
                     goto release;
             } else if (hdr->nm_status == NL_MMAP_STATUS_COPY) {
+                printf("COPYYYYYYYYYYYYYYYYYYYYYYYYYYYY\n");
                 len = recv(sk->fd, buf, sk->frame_size, MSG_DONTWAIT);
                 if (len <= 0)
                     break;
