@@ -43,10 +43,15 @@ static struct nla_policy seg6_genl_policy[SEG6_ATTR_MAX + 1] = {
 
 struct seg6_sock *seg6_socket_create(int block_size, int block_nr)
 {
+    int frame_size = MIN(16384, block_size);
+    return __seg6_socket_create(block_size, block_nr, frame_size);
+}
+
+struct seg6_sock *__seg6_socket_create(int block_size, int block_nr, int frame_size)
+{
     struct nlmem_sock *nlm_sk;
     struct seg6_sock *sk;
     long i;
-    int frame_size = MIN(16384, block_size);
 
     struct nl_mmap_req req = {
         .nm_block_size  = block_size,
