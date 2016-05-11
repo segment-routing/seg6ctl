@@ -293,6 +293,7 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
     cb = ucb ?: &sk->cb;
 
     for (;;) {
+        //printf("lolo\n");
         struct pollfd pfds[1];
 
         pfds[0].fd = sk->fd;
@@ -300,11 +301,13 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
         pfds[0].revents = 0;
 
         if (poll(pfds, 1, -1) < 0 && errno != EINTR) {
+            printf("hihi\n");
             perror("poll");
             break;
         }
 
         if (pfds[0].revents & POLLERR) {
+            printf("hehe\n");
             int error = 0;
             socklen_t errlen = sizeof(error);
             getsockopt(sk->fd, SOL_SOCKET, SO_ERROR, (void *)&error, &errlen);
@@ -312,8 +315,10 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
             break;
         }
 
-        if (!(pfds[0].revents & POLLIN))
+        if (!(pfds[0].revents & POLLIN)) {
+            printf("haha\n");
             continue;
+        }
 
         for (;;) {
             hdr = current_rx_frame(sk);
@@ -330,6 +335,8 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
                     break;
                 nlh = (struct nlmsghdr *)buf;
             } else {
+                printf("%d %d %d %p\n", hdr->nm_status, NL_MMAP_STATUS_SKIP, NL_MMAP_STATUS_VALID, hdr);
+                //advance_rx_frame(sk);
                 break;
             }
 
@@ -352,6 +359,8 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
                     }
                 } else {
                     if (cb->cb_set[NLMEM_CB_VALID]) {
+                            if (sk->delayed_release)
+                                hdr->nm_status = NL_MMAP_STATUS_SKIP;
                         NLMEM_CB_CALL(cb, NLMEM_CB_VALID, sk, nlh);
                     }
                 }
@@ -363,10 +372,9 @@ skip:
 release:
             if (!sk->delayed_release)
                 hdr->nm_status = NL_MMAP_STATUS_UNUSED;
-            else
-                hdr->nm_status = NL_MMAP_STATUS_SKIP;
 
             advance_rx_frame(sk);
+            printf("popo\n");
         }
     }
 
