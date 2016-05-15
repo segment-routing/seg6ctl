@@ -359,8 +359,8 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
                     }
                 } else {
                     if (cb->cb_set[NLMEM_CB_VALID]) {
-                            if (sk->delayed_release)
-                                hdr->nm_status = NL_MMAP_STATUS_SKIP;
+                            //if (sk->delayed_release)
+                            //    hdr->nm_status = NL_MMAP_STATUS_SKIP;
                         NLMEM_CB_CALL(cb, NLMEM_CB_VALID, sk, nlh);
                     }
                 }
