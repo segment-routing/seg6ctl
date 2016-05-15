@@ -334,10 +334,9 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
                 if (len <= 0)
                     break;
                 nlh = (struct nlmsghdr *)buf;
-            } else {
-                //printf("%d %d %d %p\n", hdr->nm_status, NL_MMAP_STATUS_SKIP, NL_MMAP_STATUS_VALID, hdr);
-                //advance_rx_frame(sk);
-                break;
+            } else { // unused or skip
+                advance_rx_frame(sk);
+                continue;
             }
 
             while (nlmsg_ok(nlh, len)) {
