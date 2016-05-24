@@ -293,7 +293,6 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
     cb = ucb ?: &sk->cb;
 
     for (;;) {
-        //printf("lolo\n");
         struct pollfd pfds[1];
 
         pfds[0].fd = sk->fd;
@@ -301,13 +300,11 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
         pfds[0].revents = 0;
 
         if (poll(pfds, 1, -1) < 0 && errno != EINTR) {
-            printf("hihi\n");
             perror("poll");
             break;
         }
 
         if (pfds[0].revents & POLLERR) {
-            printf("hehe\n");
             int error = 0;
             socklen_t errlen = sizeof(error);
             getsockopt(sk->fd, SOL_SOCKET, SO_ERROR, (void *)&error, &errlen);
@@ -315,10 +312,8 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
             break;
         }
 
-        if (!(pfds[0].revents & POLLIN)) {
-            printf("haha\n");
+        if (!(pfds[0].revents & POLLIN))
             continue;
-        }
 
         for (;;) {
             hdr = current_rx_frame(sk);
