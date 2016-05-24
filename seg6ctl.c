@@ -41,7 +41,8 @@ void usage(char *av0)
     exit(1);
 }
 
-static void parse_dumphmac(struct seg6_sock *sk __unused, struct nlattr **attr)
+static void parse_dumphmac(struct seg6_sock *sk __unused, struct nlattr **attr,
+        struct nlmsghdr *nlh __unused)
 {
     struct nlattr *a[SEG6_ATTR_MAX + 1];
     int slen, algid, hmackey;
@@ -61,7 +62,8 @@ static void parse_dumphmac(struct seg6_sock *sk __unused, struct nlattr **attr)
     printf("hmac 0x%x algo %d secret \"%s\"\n", hmackey, algid, secret);
 }
 
-static void parse_dumpbind(struct seg6_sock *sk __unused, struct nlattr **attr)
+static void parse_dumpbind(struct seg6_sock *sk __unused, struct nlattr **attr,
+        struct nlmsghdr *nlh __unused)
 {
     struct nlattr *a[SEG6_ATTR_MAX + 1];
     struct in6_addr dst, nexthop;
@@ -114,7 +116,7 @@ int main(int ac, char **av)
 #define OP_FLUSHBIND 10
 #define OP_SETTUNSRC 11
 
-    static struct option long_options[] = 
+    static struct option long_options[] =
         {
             {"hmackeyid", required_argument, 0, 'm'},
             {"set-hmac", required_argument, 0, 0 },

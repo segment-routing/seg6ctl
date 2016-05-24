@@ -43,10 +43,15 @@ static struct nla_policy seg6_genl_policy[SEG6_ATTR_MAX + 1] = {
 
 struct seg6_sock *seg6_socket_create(int block_size, int block_nr)
 {
+    int frame_size = MIN(16384, block_size);
+    return __seg6_socket_create(block_size, block_nr, frame_size);
+}
+
+struct seg6_sock *__seg6_socket_create(int block_size, int block_nr, int frame_size)
+{
     struct nlmem_sock *nlm_sk;
     struct seg6_sock *sk;
     long i;
-    int frame_size = MIN(16384, block_size);
 
     struct nl_mmap_req req = {
         .nm_block_size  = block_size,
@@ -86,7 +91,7 @@ struct nlmsghdr *seg6_new_msg(struct seg6_sock *sk, int cmd)
     return msg;
 }
 
-void seg6_set_callback(struct seg6_sock *sk, int cmd, void (*callback)(struct seg6_sock *, struct nlattr **))
+void seg6_set_callback(struct seg6_sock *sk, int cmd, void (*callback)(struct seg6_sock *, struct nlattr **, struct nlmsghdr *))
 {
     sk->callbacks[cmd*2+1] = callback;
 }
@@ -96,7 +101,7 @@ static int nl_recv_cb(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *msg, 
     struct genlmsghdr *gnlh = nlmsg_data(msg);
     struct nlattr *attrs[SEG6_ATTR_MAX + 1];
     struct seg6_sock *sk;
-    void (*callback)(struct seg6_sock *, struct nlattr **);
+    void (*callback)(struct seg6_sock *, struct nlattr **, struct nlmsghdr *);
 
     sk = (struct seg6_sock *)arg;
 
@@ -107,7 +112,33 @@ static int nl_recv_cb(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *msg, 
 
     callback = sk->callbacks[gnlh->cmd*2+1];
     if (callback)
-        callback(sk, attrs);
+        callback(sk, attrs, msg);
+
+    return NL_SKIP;
+}
+
+static int nl_recv_cb_delayed(struct nlmem_sock *nlm_sk __unused, struct nlmsghdr *msg, void *arg)
+{
+    struct genlmsghdr *gnlh = nlmsg_data(msg);
+    struct nlattr **attrs;
+    struct seg6_sock *sk;
+    void (*callback)(struct seg6_sock *, struct nlattr **, struct nlmsghdr *);
+
+    sk = (struct seg6_sock *)arg;
+
+    if((attrs = (struct nlattr **) malloc(sizeof(struct nlattr *) * SEG6_ATTR_MAX)) == NULL){
+        perror("attrs malloc");
+        return NL_SKIP;
+    }
+
+    if (genlmsg_parse(msg, 0, attrs, SEG6_ATTR_MAX, seg6_genl_policy)) {
+        perror("genlmsg_parse");
+        return NL_SKIP;
+    }
+
+    callback = sk->callbacks[gnlh->cmd*2+1];
+    if (callback)
+        callback(sk, attrs, msg);
 
     return NL_SKIP;
 }
@@ -145,7 +176,11 @@ int seg6_send_and_recv(struct seg6_sock *sk, struct nlmsghdr *msg, struct nlmem_
 
     cb = &sk->nlm_sk->cb;
 
-    nlmem_set_cb(cb, NLMEM_CB_VALID, nl_recv_cb, sk);
+    if(sk->nlm_sk->delayed_release)
+        nlmem_set_cb(cb, NLMEM_CB_VALID, nl_recv_cb_delayed, sk);
+    else
+        nlmem_set_cb(cb, NLMEM_CB_VALID, nl_recv_cb, sk);
+
     nlmem_set_cb(cb, NLMEM_CB_ACK, nl_recv_ack, &err);
     nlmem_set_cb(cb, NLMEM_CB_ERR, nl_recv_err, &err);
     nlmem_set_cb(cb, NLMEM_CB_INVALID, nl_recv_invalid, sk);
