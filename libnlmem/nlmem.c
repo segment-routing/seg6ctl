@@ -327,8 +327,9 @@ void nlmem_recv_loop(struct nlmem_sock *sk, struct nlmem_cb *ucb)
                 if (len <= 0)
                     break;
                 nlh = (struct nlmsghdr *)buf;
-            } else {
-                break;
+            } else { // unused or skip
+                advance_rx_frame(sk);
+                continue;
             }
 
             while (nlmsg_ok(nlh, len)) {
